@@ -100,16 +100,16 @@ right *document*.
 
 Additionally, if the best and second-best scores are within **0.035** of each
 other *and* the top score is below **0.62**, the match is treated as ambiguous
-and discarded. This prevents the common failure mode where "mobile app crashes"
-partially matches `dashboard.md` only because that page mentions "mobile data"
-(cellular networks) — two unrelated topics can score similarly.
+and discarded. That avoids answering from the wrong page when two unrelated
+topics score similarly (for example, a query about a **mobile app** falsely
+matching a chunk that only mentions **mobile data** in a dashboard
+network-troubleshooting list).
 
-**Content fix:** We also ship `docs/mobile.md`, which states explicitly that
-Sample App is web-only and explains browser-on-phone troubleshooting. Queries
-like "mobile app keeps crashing" then retrieve the *right* article instead of
-a misleading dashboard chunk.
-
-Thresholds are tunable for your embedding model and corpus size.
+There is **no** `mobile.md` in the teaching corpus on purpose: questions like
+*"the mobile app keeps crashing"* are **out of scope** for these docs. After
+retrieval fails, the agent should offer a support ticket — not fabricate an
+answer. That keeps Part 2 focused on **semantic retrieval when the knowledge
+exists**, and on **honest limits** when it does not.
 
 ---
 

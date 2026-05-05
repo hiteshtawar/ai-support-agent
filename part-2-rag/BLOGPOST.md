@@ -169,7 +169,9 @@ This runs on every query. The index is built once at startup.
 docs/*.md  →  chunk_text()  →  embed_text()  →  list[Chunk]
 ```
 
-Every chunk gets embedded and stored in memory. 28 chunks for our 7 docs. Takes ~10 seconds.
+Every chunk gets embedded and stored in memory. Chunk count depends on doc size
+(roughly a few dozen for the seven markdown files in this repo). First startup
+takes ~10–20 seconds while Ollama embeds each chunk.
 
 ### Phase 2 — Retrieval (per query)
 
@@ -230,9 +232,21 @@ Agent › Based on the documentation, if your dashboard is loading but
 
 Same query. Part 1 returned nothing. Part 2 finds the answer.
 
----
+### When RAG correctly says “not in the docs”
 
-## Run the Tests
+The corpus on purpose does **not** cover everything. Try:
+
+```
+You  › the mobile app keeps crashing
+You  › can I use sample app offline
+```
+
+There is no article for a native mobile app or for fully offline use. After
+retrieval confidence checks fail (or scores are ambiguous), the agent should
+**not** invent steps from unrelated pages — it should say the help center
+doesn’t cover that and **offer a support ticket**. That is still a successful
+RAG outcome: **grounded when the knowledge exists, honest when it doesn’t.**
+Part 3 picks up **multi-turn memory** (e.g. *“what was my first question?”*).
 
 ```bash
 pytest tests/ -v
@@ -252,7 +266,7 @@ You  › what was my first question this session?
 
 The agent has no idea. Every session starts fresh. The conversation history lives in a Python list that resets when the process ends.
 
-That's the next problem. Part 3 adds persistent memory — conversation history that survives restarts, and context-window management so long sessions don't get slow and expensive.
+That's the next problem. Part 3 adds persistent memory — conversation history that survives restarts, and context-window management so long sessions don't get slow and expensive. Ticket flows and follow-ups work better once the agent reliably **remembers** earlier turns.
 
 → Follow on Hashnode to get Part 3 when it drops
 → All code at [github.com/hiteshtawar/ai-support-agent](https://github.com/hiteshtawar/ai-support-agent)

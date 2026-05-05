@@ -17,6 +17,10 @@ similarity retrieval. Same agent loop. Completely different retrieval layer.
 | `agent.py`       | Same two-pass loop as Part 1, updated tool name                              |
 | `tests/`         | pytest tests for RAG functions, tools, and agent — all Ollama calls mocked   |
 
+The doc set covers web dashboards, billing, reports, etc. It **deliberately**
+does not cover native mobile apps or fully offline use — so you can demo
+retrieval **misses** that correctly fall through to a ticket offer.
+
 ---
 
 ## Setup
