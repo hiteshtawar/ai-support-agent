@@ -77,6 +77,32 @@ class TestSearchDocs:
                 )
         assert isinstance(result, dict)
 
+    def test_ambiguous_close_scores_return_not_found(self):
+        mock_results = [
+            _make_chunk("Chunk A", source="a.md", score=0.55),
+            _make_chunk("Chunk B", source="b.md", score=0.52),
+        ]
+        with patch("tools.search_index", return_value=mock_results):
+            with patch("tools._get_index", return_value=[]):
+                result = search_docs("vague unrelated query")
+        assert result["found"] is False
+
+    def test_clear_winner_passes_gap_check(self):
+        mock_results = [
+            _make_chunk("Winner", source="win.md", score=0.55),
+            _make_chunk("Loser", source="lose.md", score=0.40),
+        ]
+        with patch("tools.search_index", return_value=mock_results):
+            with patch("tools._get_index", return_value=[]):
+                result = search_docs("something specific")
+        assert result["found"] is True
+
+    def test_empty_search_results_return_not_found(self):
+        with patch("tools.search_index", return_value=[]):
+            with patch("tools._get_index", return_value=[]):
+                result = search_docs("anything")
+        assert result["found"] is False
+
     def test_result_has_required_keys(self):
         mock_results = [_make_chunk("Answer text.", score=0.85)]
         with patch("tools.search_index", return_value=mock_results):

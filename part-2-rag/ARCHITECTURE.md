@@ -94,15 +94,22 @@ right *document*.
 
 ---
 
-## The Score Threshold
+## The Score Threshold and Ambiguity Guard
 
-`search_docs` returns "not found" when the top score is below `0.4`. This
-prevents the agent from confidently answering with weakly-related chunks.
+`search_docs` returns "not found" when the top cosine score is below **0.5**.
 
-The threshold is a tunable parameter. Too low → hallucinated answers from
-barely-relevant chunks. Too high → too many "I don't know" responses.
-`0.4` is a reasonable starting point for `nomic-embed-text`; you may need to
-calibrate it for other embedding models.
+Additionally, if the best and second-best scores are within **0.035** of each
+other *and* the top score is below **0.62**, the match is treated as ambiguous
+and discarded. This prevents the common failure mode where "mobile app crashes"
+partially matches `dashboard.md` only because that page mentions "mobile data"
+(cellular networks) — two unrelated topics can score similarly.
+
+**Content fix:** We also ship `docs/mobile.md`, which states explicitly that
+Sample App is web-only and explains browser-on-phone troubleshooting. Queries
+like "mobile app keeps crashing" then retrieve the *right* article instead of
+a misleading dashboard chunk.
+
+Thresholds are tunable for your embedding model and corpus size.
 
 ---
 

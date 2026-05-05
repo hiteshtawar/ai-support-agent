@@ -4,7 +4,13 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from agent import build_initial_history, dispatch_tool, run_agent_turn
+from agent import (
+    _is_conversational_turn,
+    _strip_fake_source_lines,
+    build_initial_history,
+    dispatch_tool,
+    run_agent_turn,
+)
 from config import Config
 
 # ---------------------------------------------------------------------------
@@ -109,6 +115,27 @@ class TestDispatchTool:
 # ---------------------------------------------------------------------------
 
 
+class TestStripFakeSources:
+    def test_removes_source_lines(self):
+        t = _strip_fake_source_lines("Hello\nSource: fake.md\nDone")
+        assert "fake.md" not in t
+        assert "Hello" in t and "Done" in t
+
+
+class TestIsConversationalTurn:
+    def test_five_word_question_is_not_conversational(self):
+        assert not _is_conversational_turn("the mobile app keeps crashing")
+
+    def test_yes_is_conversational(self):
+        assert _is_conversational_turn("yes")
+
+    def test_email_is_conversational(self):
+        assert _is_conversational_turn("user@sample.com")
+
+    def test_ticket_id_is_conversational(self):
+        assert _is_conversational_turn("status of TKT-ABC123")
+
+
 class TestRunAgentTurnHistory:
     def test_user_message_appended(self):
         cfg = _make_config()
@@ -118,7 +145,8 @@ class TestRunAgentTurnHistory:
                 _, new_history = run_agent_turn(history, "Hello", cfg)
         user_msgs = [m for m in new_history if m["role"] == "user"]
         assert len(user_msgs) == 1
-        assert user_msgs[0]["content"] == "Hello"
+        assert "[No documentation match]" in user_msgs[0]["content"]
+        assert "Hello" in user_msgs[0]["content"]
 
     def test_original_history_not_mutated(self):
         cfg = _make_config()
@@ -143,26 +171,75 @@ class TestRunAgentTurnHistory:
     def test_retrieved_context_embedded_in_user_message(self):
         cfg = _make_config()
         history = build_initial_history(cfg)
+        query = "my dashboard is not loading at all and shows nothing"
         with patch("agent.search_docs", return_value=_WITH_RETRIEVAL):
             with patch(
                 "agent.ollama.chat", return_value=_ollama_text_response("Answer.")
             ):
-                _, new_history = run_agent_turn(history, "dashboard broken", cfg)
+                _, new_history = run_agent_turn(history, query, cfg)
         user_msgs = [m for m in new_history if m["role"] == "user"]
         assert len(user_msgs) == 1
         assert "dashboard.md" in user_msgs[0]["content"]
         assert "Relevant doc content." in user_msgs[0]["content"]
 
-    def test_no_context_when_not_found_uses_plain_message(self):
+    def test_short_message_skips_retrieval(self):
+        cfg = _make_config()
+        history = build_initial_history(cfg)
+        with patch("agent.search_docs") as mock_search:
+            with patch(
+                "agent.ollama.chat", return_value=_ollama_text_response("Sure.")
+            ):
+                _, new_history = run_agent_turn(history, "yes please", cfg)
+        mock_search.assert_not_called()
+        user_msgs = [m for m in new_history if m["role"] == "user"]
+        assert "[Conversation continuation]" in user_msgs[0]["content"]
+        assert "yes please" in user_msgs[0]["content"]
+
+    def test_email_address_skips_retrieval(self):
+        cfg = _make_config()
+        history = build_initial_history(cfg)
+        with patch("agent.search_docs") as mock_search:
+            with patch(
+                "agent.ollama.chat",
+                return_value=_ollama_text_response("Ticket created."),
+            ):
+                run_agent_turn(history, "user@sample.com", cfg)
+        mock_search.assert_not_called()
+
+    def test_five_word_question_calls_search_docs(self):
+        cfg = _make_config()
+        history = build_initial_history(cfg)
+        with patch("agent.search_docs", return_value=_NO_RETRIEVAL) as mock:
+            with patch("agent.ollama.chat", return_value=_ollama_text_response("ok")):
+                run_agent_turn(history, "the mobile app keeps crashing", cfg)
+        mock.assert_called_once_with("the mobile app keeps crashing")
+
+    def test_strip_removes_hallucinated_source_from_model_output(self):
         cfg = _make_config()
         history = build_initial_history(cfg)
         with patch("agent.search_docs", return_value=_NO_RETRIEVAL):
             with patch(
+                "agent.ollama.chat",
+                return_value=_ollama_text_response(
+                    "Not covered.\nSource: fake.md\nWant a ticket?"
+                ),
+            ):
+                reply, _ = run_agent_turn(history, "odd question xyz", cfg)
+        assert "Source:" not in reply
+        assert "fake.md" not in reply
+
+    def test_no_match_wraps_user_message_with_negative_instructions(self):
+        cfg = _make_config()
+        history = build_initial_history(cfg)
+        long_query = "can I use sample app without an internet connection offline"
+        with patch("agent.search_docs", return_value=_NO_RETRIEVAL):
+            with patch(
                 "agent.ollama.chat", return_value=_ollama_text_response("Dunno.")
             ):
-                _, new_history = run_agent_turn(history, "make coffee", cfg)
+                _, new_history = run_agent_turn(history, long_query, cfg)
         user_msgs = [m for m in new_history if m["role"] == "user"]
-        assert user_msgs[0]["content"] == "make coffee"
+        assert "[No documentation match]" in user_msgs[0]["content"]
+        assert long_query in user_msgs[0]["content"]
 
 
 # ---------------------------------------------------------------------------

@@ -80,10 +80,33 @@ def search_docs(query: str) -> dict:
         top_k=default_config.top_k,
     )
 
-    # Treat a top score below 0.25 as "not found".
-    # nomic-embed-text scores typically range 0.3–0.8 for relevant content;
-    # 0.25 catches genuine misses without being too aggressive.
-    if not results or results[0]["score"] < 0.25:
+    if not results:
+        return {
+            "found": False,
+            "answer": (
+                "I don't have a help article that covers your question. "
+                "I can create a support ticket so a human agent can assist you."
+            ),
+            "sources": [],
+        }
+
+    top = results[0]["score"]
+    # If the best and second-best chunks are almost tied, the match is ambiguous —
+    # returning chunks anyway makes the LLM cite the wrong article (e.g. dashboard
+    # "mobile data" vs a real mobile question).
+    if len(results) >= 2:
+        gap = top - results[1]["score"]
+        if top < 0.62 and gap < 0.035:
+            return {
+                "found": False,
+                "answer": (
+                    "I don't have a help article that covers your question clearly. "
+                    "I can create a support ticket so a human agent can assist you."
+                ),
+                "sources": [],
+            }
+
+    if top < 0.5:
         return {
             "found": False,
             "answer": (

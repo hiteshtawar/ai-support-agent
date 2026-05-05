@@ -1,6 +1,7 @@
 """Main agent loop for the Part 2 RAG-backed support agent."""
 
 import json
+import re
 import shutil
 
 import ollama
@@ -20,6 +21,77 @@ _DIM = "\033[2m"
 _CYAN = "\033[36m"
 _GREEN = "\033[32m"
 _RED = "\033[31m"
+
+
+def _strip_fake_source_lines(text: str) -> str:
+    """Remove lines that look like doc citations when none was provided.
+
+    Small models sometimes invent ``Source: foo.md`` even when explicitly
+    forbidden.  Stripping these lines is a cheap guardrail for local demos.
+
+    Args:
+        text: Raw assistant reply text.
+
+    Returns:
+        Reply text with fake ``Source:`` lines removed.
+    """
+    kept: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if stripped.lower().startswith("source:"):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+_TICKET_ID = re.compile(r"TKT-[A-F0-9]{6}", re.I)
+
+# Exact phrases (after lower + strip + optional trailing punctuation) where we
+# skip RAG so ticket / email flows are not polluted by irrelevant chunks.
+_CONVERSATIONAL_PHRASES = frozenset(
+    {
+        "yes",
+        "yeah",
+        "yep",
+        "yup",
+        "no",
+        "nope",
+        "nah",
+        "ok",
+        "okay",
+        "sure",
+        "please",
+        "thanks",
+        "thank you",
+        "yes please",
+        "no thanks",
+        "go ahead",
+        "sounds good",
+        "alright",
+        "fine",
+        "k",
+    }
+)
+
+
+def _is_conversational_turn(msg: str) -> bool:
+    """Return True when RAG should be skipped for this user message.
+
+    IMPORTANT: Do NOT use a loose word-count threshold — five-word questions
+    like \"the mobile app keeps crashing\" must still run retrieval.
+    """
+    s = msg.strip()
+    if not s:
+        return True
+    if "@" in s:
+        return True
+    if _TICKET_ID.search(s):
+        return True
+
+    low = s.lower().rstrip("!.?…").strip()
+    if low in _CONVERSATIONAL_PHRASES:
+        return True
+    return False
 
 
 def _width() -> int:
@@ -91,11 +163,10 @@ def run_agent_turn(
     Returns:
         A tuple of (assistant_reply_text, updated_history).
     """
-    # Pre-retrieve: always search the docs and embed the context directly in
-    # the user message.  Small models reliably use context when it arrives as
-    # part of the user turn — separate system messages get ignored or trigger
-    # confused tool-call output.
-    retrieval = search_docs(user_message)
+    # Skip RAG only for emails, ticket IDs, and tiny acknowledgements — not for
+    # short questions (e.g. five-word bug reports).
+    _is_conv = _is_conversational_turn(user_message)
+    retrieval = search_docs(user_message) if not _is_conv else {"found": False}
     if retrieval["found"]:
         sources = ", ".join(retrieval["sources"])
         user_content = (
@@ -106,8 +177,26 @@ def run_agent_turn(
             f"Do not ask for a support ticket. Just answer.\n\n"
             f"Question: {user_message}"
         )
+    elif not _is_conv:
+        user_content = (
+            "[No documentation match]\n"
+            "The Sample App help docs do not contain a relevant article for this question.\n"
+            "Hard rules for your reply:\n"
+            "- Do NOT write the word 'Source' or any '.md' filename.\n"
+            "- Do NOT list causes, fixes, or troubleshooting steps (you have no docs).\n"
+            "- 2–3 sentences only: say the topic is not covered in the help center, "
+            "then offer a support ticket. Ask for an email if you don't have one.\n\n"
+            f"User question: {user_message}"
+        )
     else:
-        user_content = user_message
+        user_content = (
+            "[Conversation continuation]\n"
+            "- Do NOT invent help articles or write 'Source:' / any '.md' name.\n"
+            "- If you offered a ticket and the user is agreeing, ask for their email "
+            "if missing; do not demand crash logs first.\n"
+            "- If you already have their email in this thread, call create_ticket.\n\n"
+            f"User: {user_message}"
+        )
 
     history = history + [{"role": "user", "content": user_content}]
 
@@ -143,6 +232,9 @@ def run_agent_turn(
         history = history + [{"role": "assistant", "content": reply}]
     else:
         reply = msg.content or ""
+
+    if not retrieval["found"]:
+        reply = _strip_fake_source_lines(reply)
 
     return reply, history
 
