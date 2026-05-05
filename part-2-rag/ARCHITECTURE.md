@@ -124,6 +124,16 @@ tools so the ``ticket_id`` is real.
 
 ---
 
+## Session meta-questions (no memory layer)
+
+Phrases like *“what was my first question this session?”* are detected and
+handled without RAG. The LLM call uses **only** the system prompt and that
+message—**prior chat turns are omitted**—so the model cannot paraphrase the
+transcript and fake recall. That makes the Part 2 limitation visible in the REPL;
+**Part 3** adds genuine session or persistent memory.
+
+---
+
 ## What This Architecture Does Not Handle
 
 | Missing                  | Why it matters for Part 3+                                        |
@@ -132,6 +142,9 @@ tools so the ``ticket_id`` is real.
 | No re-ranking            | Top-k by cosine may not be the most relevant for the LLM          |
 | No conversation context in retrieval | Query uses only the current message, not conversation history |
 | No streaming             | Replies appear all at once                                        |
-| No persistent memory     | Conversation resets on each run                                   |
+| No persistent memory     | Conversation resets on each run; Part 1’s in-memory `history` is not durable |
 
-Persistent memory and context-aware retrieval are the focus of Part 3.
+Part 3 in **this** repo is about **persistent / session memory** and managing
+context. Improvements like **hybrid retrieval** (e.g. BM25 + dense vectors) are a
+separate axis—better *document* matching—not a substitute for storage and
+summaries; you can teach them in a later part if you extend the roadmap.

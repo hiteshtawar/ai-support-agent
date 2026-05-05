@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from agent import (
     _is_conversational_turn,
+    _is_session_meta_question,
     _strip_fake_source_lines,
     build_initial_history,
     dispatch_tool,
@@ -136,6 +137,19 @@ class TestIsConversationalTurn:
         assert _is_conversational_turn("status of TKT-ABC123")
 
 
+class TestIsSessionMetaQuestion:
+    def test_first_question_phrases(self):
+        assert _is_session_meta_question("What was my first question this session?")
+        assert _is_session_meta_question("what did I ask first")
+        assert _is_session_meta_question("First question in this session?")
+
+    def test_normal_queries_not_meta(self):
+        assert not _is_session_meta_question("the mobile app keeps crashing")
+        assert not _is_session_meta_question(
+            "how do I export a report to CSV this session"
+        )
+
+
 class TestRunAgentTurnHistory:
     def test_user_message_appended(self):
         cfg = _make_config()
@@ -240,6 +254,28 @@ class TestRunAgentTurnHistory:
         user_msgs = [m for m in new_history if m["role"] == "user"]
         assert "[No documentation match]" in user_msgs[0]["content"]
         assert long_query in user_msgs[0]["content"]
+
+    def test_session_meta_skips_search_docs(self):
+        cfg = _make_config()
+        history = build_initial_history(cfg)
+        with patch("agent.search_docs") as mock_search:
+            with patch(
+                "agent.ollama.chat", return_value=_ollama_text_response("Can't recall.")
+            ) as mock_chat:
+                _, new_history = run_agent_turn(
+                    history, "What was my first question this session?", cfg
+                )
+        mock_search.assert_not_called()
+        mock_chat.assert_called_once()
+        call_kw = mock_chat.call_args.kwargs
+        assert len(call_kw["messages"]) == 2
+        assert call_kw["messages"][0]["role"] == "system"
+        assert "Session memory" in call_kw["messages"][1]["content"]
+        assert "tools" not in call_kw
+        user_msgs = [m for m in new_history if m["role"] == "user"]
+        assert "[Session memory — not implemented — no transcript on this turn]" in (
+            user_msgs[0]["content"]
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,8 @@
 
 ---
 
-In Part 1 we built a working support agent. It answers questions, creates tickets, remembers the conversation. It works.
+In Part 1 we built a working support agent. It answers questions, creates tickets,
+and keeps the **current chat** in a Python list until you exit. It works.
 
 Then we tried this:
 
@@ -232,21 +233,67 @@ Agent › Based on the documentation, if your dashboard is loading but
 
 Same query. Part 1 returned nothing. Part 2 finds the answer.
 
-### When RAG correctly says “not in the docs”
+### When something truly isn’t in the docs
 
-The corpus on purpose does **not** cover everything. Try:
+The corpus on purpose does **not** cover everything. Topics such as **native
+mobile crashes** or **fully offline use** have no article. After retrieval
+confidence checks fail (or scores are ambiguous), the agent must **not** invent
+steps from unrelated pages. It should say the help center doesn’t cover that
+topic and **offer a support ticket** — still a good RAG outcome: **grounded when
+the knowledge exists, honest when it doesn’t.**
+
+Try, for example:
 
 ```
 You  › the mobile app keeps crashing
-You  › can I use sample app offline
+You  › can I use Sample App offline with no internet
 ```
 
-There is no article for a native mobile app or for fully offline use. After
-retrieval confidence checks fail (or scores are ambiguous), the agent should
-**not** invent steps from unrelated pages — it should say the help center
-doesn’t cover that and **offer a support ticket**. That is still a successful
-RAG outcome: **grounded when the knowledge exists, honest when it doesn’t.**
-Part 3 picks up **multi-turn memory** (e.g. *“what was my first question?”*).
+---
+
+## Hands-on demo scripts (what Part 2 is meant to show)
+
+Use these in order when teaching or writing your own notes.
+
+### 1. Out-of-corpus → no answer → ticket
+
+```
+You  › mobile app crashes
+```
+
+Expected shape: the agent says it **doesn’t find** that topic in the help center
+(no fake how-to from `dashboard.md`), and **asks for an email** to open a
+ticket.
+
+### 2. Full ticket flow (including status)
+
+Use any issue that will miss retrieval (e.g. **bug report** wording), then
+consent, email, and status:
+
+```
+You  › I need to report a bug
+You  › yes please
+You  › user@sample.com
+You  › what's the status of TKT-XXXXXX
+```
+
+Use the real `TKT-…` id from the confirmation line — Part 2 creates the ticket
+in code when you send a plain email after a ticket offer, so the id is real.
+
+### 3. “Memory” — deliberate gap before Part 3
+
+After a few turns, ask:
+
+```
+You  › what was my first question this session?
+```
+
+Part 2 has **no structured session memory** (no summaries, no transcript API).
+The agent is **not given prior turns** for that request (only system + the
+meta prompt), so it cannot paraphrase your chat log—**real** session memory
+arrives in **Part 3**.
+
+### Run the tests
 
 ```bash
 pytest tests/ -v
@@ -258,18 +305,33 @@ All Ollama calls are mocked — tests run without a live server. The RAG tests u
 
 ## What's Next
 
-The query `"the app looks completely empty"` now works. But try:
+Part 2 fixes **retrieval** from markdown. It does **not** add product-grade
+**memory**: no durable session summary, no recall after restart, no intentional
+tie between tickets and “what we already talked about.” That’s **Part 3** —
+persistent memory, context-window discipline, and flows like “what was I trying
+to do three turns ago?” without hand-waving.
+
+**Terminology:** In Part 1, **conversation state** is just the `history` list you
+pass into each chat call. The model “remembers” earlier turns only because **you
+resend them**. That is not the same as a **memory layer**: nothing is stored for
+the next process, there is no summarised session object, and (in Part 2) we even
+strip prior turns for the session-meta demo on purpose. Part 3 is where those
+ideas become explicit engineering—not a longer prompt paste.
+
+→ Follow on Hashnode to get Part 3 when it drops
+→ All code at [github.com/hiteshtawar/ai-support-agent](https://github.com/hiteshtawar/ai-support-agent)
+
+---
+
+### Quick recap check
 
 ```
 You  › what was my first question this session?
 ```
 
-The agent has no idea. Every session starts fresh. The conversation history lives in a Python list that resets when the process ends.
-
-That's the next problem. Part 3 adds persistent memory — conversation history that survives restarts, and context-window management so long sessions don't get slow and expensive. Ticket flows and follow-ups work better once the agent reliably **remembers** earlier turns.
-
-→ Follow on Hashnode to get Part 3 when it drops
-→ All code at [github.com/hiteshtawar/ai-support-agent](https://github.com/hiteshtawar/ai-support-agent)
+In Part 2 that turn is answered **without** prior chat messages being sent to
+the model, so it should **not** repeat your first question from the transcript—
+only Part 3 adds real session memory.
 
 ---
 

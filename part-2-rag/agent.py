@@ -46,6 +46,12 @@ def _strip_fake_source_lines(text: str) -> str:
 
 _TICKET_ID = re.compile(r"TKT-[A-F0-9]{6}", re.I)
 _USER_EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+# Session meta-questions — no structured memory in Part 2 (teaser for Part 3).
+_SESSION_META_QUESTION = re.compile(
+    r"(?i)(what\s+was\s+my\s+first\s+question|"
+    r"what\s+did\s+i\s+ask\s+first|"
+    r"first\s+question\s+(?:in\s+this\s+session|in\s+the\s+session|this\s+session)\b)"
+)
 
 # Exact phrases (after lower + strip + optional trailing punctuation) where we
 # skip RAG so ticket / email flows are not polluted by irrelevant chunks.
@@ -93,6 +99,11 @@ def _is_conversational_turn(msg: str) -> bool:
     if low in _CONVERSATIONAL_PHRASES:
         return True
     return False
+
+
+def _is_session_meta_question(msg: str) -> bool:
+    """True when the user asks about the chat itself (recall), not product docs."""
+    return bool(_SESSION_META_QUESTION.search(msg.strip()))
 
 
 def _infer_issue_from_history(history: list[dict]) -> str:
@@ -216,8 +227,10 @@ def run_agent_turn(
 ) -> tuple[str, list[dict]]:
     """Process a single user turn and return the assistant's reply plus updated history.
 
-    Retrieval strategy: always run search_docs programmatically before the LLM
-    call and inject the results as a system context message.  Small local models
+    Retrieval strategy: run search_docs before the LLM for normal product
+    questions and inject the results into the user message. Session
+    meta-questions (e.g. first question in this chat) skip RAG and use a fixed
+    ``[Session memory — not implemented]`` prompt. Small local models
     (llama3.2 3B) don't reliably call retrieval tools on their own — pre-fetching
     the context guarantees the LLM always answers from the docs rather than from
     its own (potentially hallucinated) knowledge.
@@ -240,29 +253,46 @@ def run_agent_turn(
     # Skip RAG only for emails, ticket IDs, and tiny acknowledgements — not for
     # short questions (e.g. five-word bug reports).
     _is_conv = _is_conversational_turn(user_message)
-    retrieval = search_docs(user_message) if not _is_conv else {"found": False}
-    if retrieval["found"]:
-        sources = ", ".join(retrieval["sources"])
+    _is_meta = _is_session_meta_question(user_message)
+
+    if _is_meta:
+        retrieval = {"found": False}
         user_content = (
-            f"[Documentation from {sources}]\n"
-            f"{retrieval['answer']}\n"
-            f"[End of documentation]\n\n"
-            f"Answer the following question using ONLY the documentation above. "
-            f"Do not ask for a support ticket. Just answer.\n\n"
-            f"Question: {user_message}"
+            "[Session memory — not implemented — no transcript on this turn]\n"
+            "You only see the system prompt and this message. Earlier chat turns are "
+            "not included in this API call—Part 2 has no session-recall layer, so you "
+            "literally cannot read what was asked before.\n"
+            f"The user's latest message is:\n{user_message}\n\n"
+            "Reply in 2–3 sentences: you have no visibility into earlier questions in "
+            "this session. Suggest they scroll the chat if their client shows history. "
+            "Do not guess or invent prior questions. Do not offer a support ticket "
+            "unless they switch to a concrete product issue."
         )
     elif not _is_conv:
-        user_content = (
-            "[No documentation match]\n"
-            "The Sample App help docs do not contain a relevant article for this question.\n"
-            "Hard rules for your reply:\n"
-            "- Do NOT write the word 'Source' or any '.md' filename.\n"
-            "- Do NOT list causes, fixes, or troubleshooting steps (you have no docs).\n"
-            "- 2–3 sentences only: say the topic is not covered in the help center, "
-            "then offer a support ticket. Ask for an email if you don't have one.\n\n"
-            f"User question: {user_message}"
-        )
+        retrieval = search_docs(user_message)
+        if retrieval["found"]:
+            sources = ", ".join(retrieval["sources"])
+            user_content = (
+                f"[Documentation from {sources}]\n"
+                f"{retrieval['answer']}\n"
+                f"[End of documentation]\n\n"
+                f"Answer the following question using ONLY the documentation above. "
+                f"Do not ask for a support ticket. Just answer.\n\n"
+                f"Question: {user_message}"
+            )
+        else:
+            user_content = (
+                "[No documentation match]\n"
+                "The Sample App help docs do not contain a relevant article for this question.\n"
+                "Hard rules for your reply:\n"
+                "- Do NOT write the word 'Source' or any '.md' filename.\n"
+                "- Do NOT list causes, fixes, or troubleshooting steps (you have no docs).\n"
+                "- 2–3 sentences only: say the topic is not covered in the help center, "
+                "then offer a support ticket. Ask for an email if you don't have one.\n\n"
+                f"User question: {user_message}"
+            )
     else:
+        retrieval = {"found": False}
         user_content = (
             "[Conversation continuation]\n"
             "- Do NOT invent help articles or write 'Source:' / any '.md' name.\n"
@@ -274,12 +304,24 @@ def run_agent_turn(
 
     history = history + [{"role": "user", "content": user_content}]
 
-    response = ollama.chat(
-        model=cfg.model,
-        messages=history,
-        tools=_ACTION_TOOL_DEFINITIONS,
-        options={"temperature": cfg.temperature, "num_predict": cfg.max_tokens},
-    )
+    # Session-meta questions must not receive prior turns: otherwise the model
+    # answers from the transcript and "memory" appears to work — bad Part 3 setup.
+    if _is_meta:
+        llm_messages = build_initial_history(cfg) + [
+            {"role": "user", "content": user_content}
+        ]
+    else:
+        llm_messages = history
+
+    chat_kwargs: dict = {
+        "model": cfg.model,
+        "messages": llm_messages,
+        "options": {"temperature": cfg.temperature, "num_predict": cfg.max_tokens},
+    }
+    if not _is_meta:
+        chat_kwargs["tools"] = _ACTION_TOOL_DEFINITIONS
+
+    response = ollama.chat(**chat_kwargs)
 
     msg = response.message
     tool_calls = msg.tool_calls or []

@@ -21,6 +21,12 @@ The doc set covers web dashboards, billing, reports, etc. It **deliberately**
 does not cover native mobile apps or fully offline use — so you can demo
 retrieval **misses** that correctly fall through to a ticket offer.
 
+### Demo scripts (same story as the Part 2 blog post)
+
+1. **Out of docs** — e.g. `mobile app crashes` → agent should say it’s not in the help center and offer a ticket (no invented fixes).
+2. **Ticket flow** — `I need to report a bug` → `yes please` → `user@sample.com` → `what's the status of TKT-…` (paste the real id from the confirmation).
+3. **Memory gap (Part 3 setup)** — after a few turns: `what was my first question this session?` That turn is sent to the model **without** earlier messages (only system + the meta prompt), so it cannot read the transcript—**real** session memory is Part 3. Quitting the CLI still wipes in-process history. *(This is different from Part 1’s “conversation state”: that’s just resending `history` in one run; it still isn’t durable memory.)*
+
 ---
 
 ## Setup
@@ -50,7 +56,7 @@ On first run you will see:
 
 ```
   Building RAG index… (this runs once at startup)
-  Index ready — 87 chunks from .../docs
+  Index ready — ~28 chunks from .../docs
 ```
 
 The index is built by embedding every chunk in `docs/` using `nomic-embed-text`.
