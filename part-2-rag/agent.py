@@ -7,7 +7,7 @@ import shutil
 import ollama
 
 from config import Config, config as default_config
-from tools import TOOL_DEFINITIONS, TOOL_HANDLERS, search_docs
+from tools import TOOL_DEFINITIONS, TOOL_HANDLERS, create_ticket, search_docs
 
 # search_docs is handled via pre-retrieval before every LLM call — the LLM
 # only needs tools for actions the user explicitly requests.
@@ -45,6 +45,7 @@ def _strip_fake_source_lines(text: str) -> str:
 
 
 _TICKET_ID = re.compile(r"TKT-[A-F0-9]{6}", re.I)
+_USER_EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 # Exact phrases (after lower + strip + optional trailing punctuation) where we
 # skip RAG so ticket / email flows are not polluted by irrelevant chunks.
@@ -92,6 +93,75 @@ def _is_conversational_turn(msg: str) -> bool:
     if low in _CONVERSATIONAL_PHRASES:
         return True
     return False
+
+
+def _infer_issue_from_history(history: list[dict]) -> str:
+    """Best-effort issue string for create_ticket from earlier user turns."""
+    for m in reversed(history):
+        if m.get("role") != "user":
+            continue
+        c = m.get("content", "")
+        if "User question:" in c:
+            return c.split("User question:", 1)[-1].strip()[:500]
+    for m in reversed(history):
+        if m.get("role") != "user":
+            continue
+        c = m.get("content", "")
+        if "[Documentation from" in c and "Question:" in c:
+            return c.split("Question:", 1)[-1].strip()[:500]
+    return "Support request (details in conversation)."
+
+
+def _assistant_offered_ticket_or_email(history: list[dict]) -> bool:
+    """True if a recent assistant turn looked like ticket / email collection."""
+    for m in reversed(history[-10:]):
+        if m.get("role") != "assistant":
+            continue
+        t = (m.get("content") or "").lower()
+        if "ticket" in t and ("email" in t or "e-mail" in t or "address" in t):
+            return True
+    return False
+
+
+def _try_programmatic_ticket_from_email(
+    history: list[dict],
+    user_message: str,
+    cfg: Config,
+) -> tuple[str, list[dict]] | None:
+    """If user sent an email after a ticket offer, create_ticket in code.
+
+    Llama 3.2 3B often *says* it created a ticket without calling the tool.
+    This path guarantees a real row in ``_ticket_store`` and a real ID.
+
+    Returns:
+        ``(reply, new_history)`` when handled, else ``None``.
+    """
+    if not _USER_EMAIL.match(user_message.strip()):
+        return None
+    if not _assistant_offered_ticket_or_email(history):
+        return None
+
+    issue = _infer_issue_from_history(history)
+    ticket = create_ticket(issue=issue, user_email=user_message.strip())
+    ticket_json = json.dumps(ticket)
+
+    instr = (
+        "[Ticket created — factual system result]\n"
+        f"A support ticket was created in the database. Use ONLY this JSON; "
+        f"do not invent a ticket ID:\n{ticket_json}\n\n"
+        "Write a brief confirmation to the user with the real ticket_id and "
+        "that the team will follow up at their email. One short paragraph."
+    )
+    history = history + [{"role": "user", "content": instr}]
+    follow_up = ollama.chat(
+        model=cfg.model,
+        messages=history,
+        options={"temperature": cfg.temperature, "num_predict": cfg.max_tokens},
+    )
+    reply = follow_up.message.content or ""
+    history = history + [{"role": "assistant", "content": reply}]
+    reply = _strip_fake_source_lines(reply)
+    return reply, history
 
 
 def _width() -> int:
@@ -163,6 +233,10 @@ def run_agent_turn(
     Returns:
         A tuple of (assistant_reply_text, updated_history).
     """
+    handled = _try_programmatic_ticket_from_email(history, user_message, cfg)
+    if handled is not None:
+        return handled
+
     # Skip RAG only for emails, ticket IDs, and tiny acknowledgements — not for
     # short questions (e.g. five-word bug reports).
     _is_conv = _is_conversational_turn(user_message)

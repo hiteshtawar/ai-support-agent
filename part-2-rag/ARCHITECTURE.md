@@ -113,6 +113,17 @@ exists**, and on **honest limits** when it does not.
 
 ---
 
+## Programmatic ``create_ticket`` after the user sends an email
+
+Local 3B models often **say** a ticket was created without actually returning
+``tool_calls``.  ``agent.py`` therefore detects a **plain email** on the
+user’s turn when a recent assistant message asked for an **email** in the
+context of a **ticket**, calls ``create_ticket`` in Python, injects the JSON
+into the chat, and asks the model for a **single** confirmation reply **without**
+tools so the ``ticket_id`` is real.
+
+---
+
 ## What This Architecture Does Not Handle
 
 | Missing                  | Why it matters for Part 3+                                        |

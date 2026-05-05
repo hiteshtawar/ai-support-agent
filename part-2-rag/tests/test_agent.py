@@ -243,6 +243,66 @@ class TestRunAgentTurnHistory:
 
 
 # ---------------------------------------------------------------------------
+# Programmatic create_ticket when user sends email (small-model guardrail)
+# ---------------------------------------------------------------------------
+
+
+class TestProgrammaticTicketFromEmail:
+    def test_creates_ticket_when_user_sends_email_after_offer(self):
+        cfg = _make_config()
+        history = build_initial_history(cfg)
+        history.append(
+            {
+                "role": "user",
+                "content": (
+                    "[No documentation match]\n\n" "User question: mobile app crashes"
+                ),
+            }
+        )
+        history.append(
+            {
+                "role": "assistant",
+                "content": (
+                    "We could not find that topic. Please share your email "
+                    "so we can open a support ticket."
+                ),
+            }
+        )
+        with patch("agent.create_ticket") as mock_create:
+            mock_create.return_value = {
+                "ticket_id": "TKT-TEST01",
+                "issue": "mobile app crashes",
+                "user_email": "user@test.com",
+                "status": "open",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+            with patch(
+                "agent.ollama.chat",
+                return_value=_ollama_text_response(
+                    "Your ticket TKT-TEST01 is open; we'll email you."
+                ),
+            ):
+                reply, _ = run_agent_turn(history, "user@test.com", cfg)
+
+        mock_create.assert_called_once()
+        assert mock_create.call_args.kwargs["user_email"] == "user@test.com"
+        assert "mobile app" in mock_create.call_args.kwargs["issue"].lower()
+        assert "TKT-TEST01" in reply
+
+    def test_does_not_trigger_without_ticket_context(self):
+        cfg = _make_config()
+        history = build_initial_history(cfg)
+        with patch("agent.create_ticket") as mock_create:
+            with patch("agent.search_docs", return_value=_NO_RETRIEVAL):
+                with patch(
+                    "agent.ollama.chat",
+                    return_value=_ollama_text_response("Hello."),
+                ):
+                    run_agent_turn(history, "solo@test.com", cfg)
+        mock_create.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # run_agent_turn — tool dispatch path
 # ---------------------------------------------------------------------------
 
